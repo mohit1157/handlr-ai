@@ -8,9 +8,12 @@ const config = {
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   TELEGRAM_OWNER_ID: Number(process.env.TELEGRAM_OWNER_ID),
 
-  // AI
+  // AI Providers
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || null,
+  GOOGLE_AI_KEY: process.env.GOOGLE_AI_KEY || null,
+  DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY || null,
+  GROQ_API_KEY: process.env.GROQ_API_KEY || null,
   MODEL: process.env.MODEL || "gpt-4o-mini",
 
   // Limits

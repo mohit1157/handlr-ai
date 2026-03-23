@@ -10,7 +10,7 @@ const email = require("../tools/email");
 const { startSessionApproval } = require("../security/approval");
 const tasks = require("../memory/tasks");
 const selfMod = require("../tools/selfModify");
-const { setModel } = require("./providers");
+const { setModel, listModels } = require("./providers");
 const config = require("../config");
 
 let _bot = null;
@@ -257,7 +257,11 @@ const handlers = {
   },
 
   // === Model / Code / Tasks / Approval ===
-  async switch_model({ model }) { return { success: true, message: `Switched to: ${setModel(model).model}` }; },
+  async switch_model({ model }) {
+    if (!model || model === "list") return listModels();
+    const result = setModel(model);
+    return { success: true, message: `Switched to ${result.model} (${result.provider})`, ...result };
+  },
   async self_modify(args) { return selfMod.modifyAndRestart(args); },
   async rollback_code() { return selfMod.rollback(); },
   async create_task(args) { return tasks.createTask(args); },
