@@ -270,6 +270,24 @@ const handlers = {
     startSessionApproval(_chatId, "session", { minutes: mins });
     return { approved: true, minutes: mins, message: `Session approval active for ${mins} minutes.` };
   },
+
+  // === Updater ===
+  async check_update() {
+    const updater = require("../updater");
+    const update = await updater.checkForUpdate();
+    if (update) {
+      return { updateAvailable: true, current: update.currentVersion, latest: update.latestVersion, notes: update.notes };
+    }
+    return { updateAvailable: false, version: updater.getCurrentVersion(), message: "You are on the latest version." };
+  },
+  async apply_update() {
+    const updater = require("../updater");
+    const result = await updater.applyUpdate();
+    if (result.success) {
+      return { success: true, message: "Update installed. Restarting...", backupDir: result.backupDir };
+    }
+    return { success: false, error: result.error };
+  },
 };
 
 async function executeTool(name, args) {

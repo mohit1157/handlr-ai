@@ -469,6 +469,8 @@ const tools = [
   { type: "function", function: { name: "read_email_body", description: "Read the full body text of an email by UID. Use for parsing meeting invites, itineraries, and detailed content.", parameters: { type: "object", properties: { uid: { type: "string", description: "Email UID from check_email" }, folder: { type: "string", description: "IMAP folder (default INBOX)" } }, required: ["uid"] } } },
   { type: "function", function: { name: "analyze_form", description: "Scan the current page for all form elements and return their selectors, types, labels, and required status. Call this BEFORE filling any form.", parameters: { type: "object", properties: {} } } },
   { type: "function", function: { name: "wait_for_element", description: "Wait for a CSS selector to appear on the page. Use when pages are slow to load or after navigation.", parameters: { type: "object", properties: { selector: { type: "string", description: "CSS selector to wait for" }, timeout_ms: { type: "number", description: "Max wait time in ms (default 10000)" } }, required: ["selector"] } } },
+  { type: "function", function: { name: "check_update", description: "Check if a newer version of Handlr AI is available.", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "apply_update", description: "Download and install the latest Handlr AI update. Backs up current code first, then pulls from GitHub and restarts.", parameters: { type: "object", properties: {} } } },
 ];
 
 module.exports = tools;

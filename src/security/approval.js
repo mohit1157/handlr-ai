@@ -6,7 +6,7 @@ const MODIFYING_TOOLS = new Set([
   "send_email", "reply_email", "configure_email", "self_modify",
   "download_file", "upload_file", "select_dropdown", "check_box",
   "open_tab", "close_tab", "handle_popup",
-  "save_credential", "configure_calendar", "create_calendar_event", "update_calendar_event", "delete_calendar_event",
+  "save_credential", "configure_calendar", "create_calendar_event", "update_calendar_event", "delete_calendar_event", "apply_update",
 ]);
 
 // Tools that are always safe
@@ -21,7 +21,7 @@ const SAFE_TOOLS = new Set([
   "analyze_screenshot", "process_image", "request_otp",
   "read_email_body", "analyze_form", "wait_for_element",
   "get_credential", "list_credentials", "list_calendar_events",
-  "solve_captcha", "switch_model", "rollback_code",
+  "solve_captcha", "switch_model", "rollback_code", "check_update",
 ]);
 
 // Pending approvals: Map<callbackId, { resolve, timer }>
