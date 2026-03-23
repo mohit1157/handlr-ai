@@ -11,10 +11,6 @@ for (const dir of ["chat_history", "screenshots", "documents", "downloads", "tas
 // Load config (validates env vars)
 require("./src/config");
 
-// Initialize mem0 memory system
-const { initMem0 } = require("./src/memory/mem0");
-initMem0().catch(() => {});
-
 // Start the Telegram bot
 const { startBot } = require("./src/telegram/bot");
 

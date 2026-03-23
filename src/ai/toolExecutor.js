@@ -4,6 +4,7 @@ const { runShell } = require("../tools/shell");
 const browser = require("../tools/browser");
 const { getSystemStatus } = require("../tools/status");
 const { saveMemory, recallMemory } = require("../memory/longTermMemory");
+const vectorMemory = require("../memory/vectorMemory");
 const { createDocument, createExcel, readExcel, readPDF } = require("../tools/documents");
 const email = require("../tools/email");
 const { startSessionApproval } = require("../security/approval");
@@ -109,8 +110,23 @@ const handlers = {
   },
 
   // === Memory ===
-  async save_memory({ key, value }) { return saveMemory(key, value); },
-  async recall_memory({ key }) { return recallMemory(key); },
+  async save_memory({ key, value }) {
+    const licenseKey = config.LICENSE_KEY || String(_chatId);
+    // Store in both vector memory and file-based (fallback)
+    try {
+      await vectorMemory.saveFact(licenseKey, key, value);
+    } catch {}
+    return saveMemory(key, value);
+  },
+  async recall_memory({ key }) {
+    const licenseKey = config.LICENSE_KEY || String(_chatId);
+    // Try vector memory first, fallback to file-based
+    try {
+      const result = await vectorMemory.recallFact(licenseKey, key);
+      if (result && (typeof result === "string" ? result.length > 0 : true)) return result;
+    } catch {}
+    return recallMemory(key);
+  },
 
   // === Email ===
   async configure_email(args) { return await email.configureEmail(args); },

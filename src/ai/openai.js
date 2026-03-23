@@ -6,22 +6,33 @@ const { executeTool, setContext } = require("./toolExecutor");
 const { needsApproval, requestApproval } = require("../security/approval");
 const history = require("../memory/chatHistory");
 const { chatCompletion, getModel } = require("./providers");
-const mem0 = require("../memory/mem0");
+const vectorMemory = require("../memory/vectorMemory");
+const longTermMemory = require("../memory/longTermMemory");
 
 /**
- * Agentic chat loop with tool calling and mem0 memory.
+ * Agentic chat loop with tool calling and vector memory.
  */
 async function chat(chatId, userMessage, bot) {
   history.addMessage(chatId, { role: "user", content: userMessage });
   setContext(bot, chatId);
 
   const screenshotPaths = [];
+  const licenseKey = config.LICENSE_KEY || String(chatId);
 
   // Retrieve relevant memories for context
   let memoryContext = "";
   try {
-    memoryContext = await mem0.searchMemory(chatId, userMessage);
-  } catch {}
+    memoryContext = await vectorMemory.searchMemories(licenseKey, userMessage);
+  } catch {
+    // Fallback to simple memory
+    try {
+      const all = longTermMemory.getAllMemories();
+      if (all && Object.keys(all).length > 0) {
+        const items = Object.entries(all).map(([k, v]) => `- ${k}: ${v.value}`);
+        memoryContext = `\n\nRELEVANT MEMORIES:\n${items.join("\n")}`;
+      }
+    } catch {}
+  }
 
   for (let round = 0; round < config.MAX_TOOL_ROUNDS; round++) {
     if (round > 0 && round % config.PROGRESS_INTERVAL === 0) {
@@ -49,10 +60,7 @@ async function chat(chatId, userMessage, bot) {
     // No tool calls = final text response
     if (!assistantMsg.tool_calls?.length) {
       // Store memories in background (fire-and-forget)
-      mem0.addMemory(chatId, [
-        { role: "user", content: userMessage },
-        { role: "assistant", content: assistantMsg.content },
-      ]).catch(() => {});
+      vectorMemory.addMemories(licenseKey, userMessage, assistantMsg.content).catch(() => {});
       return { text: assistantMsg.content, screenshots: screenshotPaths };
     }
 
