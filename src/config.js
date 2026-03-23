@@ -43,13 +43,28 @@ const config = {
   PROXY_URL: process.env.PROXY_URL || null,
   PROXY_AUTH: process.env.PROXY_AUTH || null,
 
+  // Optional - Supabase Bridge (for SaaS chat interface)
+  SUPABASE_URL: process.env.SUPABASE_URL || null,
+  SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY || null,
+  LICENSE_KEY: process.env.LICENSE_KEY || null,
+
   // Optional - Services
   VAULT_KEY: process.env.VAULT_KEY || null,
   GOOGLE_CALENDAR_ID: process.env.GOOGLE_CALENDAR_ID || "primary",
 };
 
-// Validate required config
-const required = ["TELEGRAM_BOT_TOKEN", "TELEGRAM_OWNER_ID", "OPENAI_API_KEY"];
+// Validate required config — Telegram OR Supabase bridge must be configured
+const hasTelegram = config.TELEGRAM_BOT_TOKEN && config.TELEGRAM_OWNER_ID;
+const hasSupabase = config.SUPABASE_URL && config.LICENSE_KEY;
+if (!hasTelegram && !hasSupabase) {
+  console.error("Missing config: set either TELEGRAM_BOT_TOKEN+TELEGRAM_OWNER_ID or SUPABASE_URL+LICENSE_KEY");
+  process.exit(1);
+}
+if (!config.OPENAI_API_KEY) {
+  console.error("Missing required env var: OPENAI_API_KEY");
+  process.exit(1);
+}
+const required = ["OPENAI_API_KEY"];
 for (const key of required) {
   if (!config[key]) {
     console.error(`Missing required env var: ${key}`);
