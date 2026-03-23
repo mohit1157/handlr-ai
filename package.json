@@ -1,0 +1,27 @@
+{
+  "name": "handlr-ai",
+  "version": "6.0.0",
+  "description": "Handlr AI — Cross-platform AI assistant with full computer control",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "pm2": "pm2 start index.js --name handlr --restart-delay=10000"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0",
+    "node-telegram-bot-api": "^0.66.0",
+    "openai": "^4.0.0",
+    "puppeteer-core": "^22.0.0",
+    "puppeteer-extra": "^3.3.0",
+    "puppeteer-extra-plugin-stealth": "^2.11.0",
+    "pdfkit": "^0.15.0",
+    "pdf-parse": "^1.1.1",
+    "docx": "^9.0.0",
+    "exceljs": "^4.4.0",
+    "nodemailer": "^6.9.0",
+    "imapflow": "^1.0.0",
+    "sharp": "^0.33.0",
+    "googleapis": "^140.0.0",
+    "mem0ai": "^0.1.0"
+  }
+}
