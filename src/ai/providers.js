@@ -20,6 +20,8 @@ const MODEL_MAP = {
 
   // Anthropic Claude
   "claude-opus": "claude-opus-4-20250514",
+  "claude-opus-4-6": "claude-opus-4-20250514",
+  "claude-opus-4.6": "claude-opus-4-20250514",
   "claude-sonnet": "claude-sonnet-4-20250514",
   "claude-haiku": "claude-haiku-4-5-20251001",
   "opus": "claude-opus-4-20250514",
@@ -213,6 +215,11 @@ async function anthropicCompletion({ model, messages, tools }) {
         content: [{ type: "tool_result", tool_use_id: msg.tool_call_id, content: msg.content }],
       });
     }
+  }
+
+  // Ensure at least one message (Anthropic requires non-empty messages array)
+  if (!convertedMsgs.length) {
+    convertedMsgs.push({ role: "user", content: "hi" });
   }
 
   const response = await client.messages.create({
