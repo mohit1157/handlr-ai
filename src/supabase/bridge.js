@@ -57,6 +57,40 @@ async function sendMessage(role, content, metadata = {}) {
   }
 }
 
+// Create a fake "bot" object that mimics Telegram bot API but sends via Supabase
+function createWebSender() {
+  return {
+    sendMessage: async (chatId, text, opts) => {
+      await sendMessage("assistant", text, { telegram_opts: opts });
+      return { message_id: Date.now() };
+    },
+    sendPhoto: async (chatId, photo, opts) => {
+      // Convert photo buffer/path to base64 if needed
+      const fs = require("fs");
+      let photoData = null;
+      if (typeof photo === "string" && fs.existsSync(photo)) {
+        photoData = `data:image/png;base64,${fs.readFileSync(photo).toString("base64")}`;
+      }
+      await sendMessage("assistant", opts?.caption || "Screenshot", {
+        type: "screenshot",
+        image: photoData,
+      });
+      return { message_id: Date.now() };
+    },
+    sendDocument: async (chatId, doc, opts) => {
+      await sendMessage("assistant", opts?.caption || "Document sent", {
+        type: "document",
+        filename: opts?.filename || "file",
+      });
+      return { message_id: Date.now() };
+    },
+    editMessageText: async (text) => {
+      // Progress updates — just log, don't flood the chat
+      return;
+    },
+  };
+}
+
 async function handleUserMessage(msg) {
   const userId = config.LICENSE_KEY;
   const text = msg.content;
@@ -67,8 +101,11 @@ async function handleUserMessage(msg) {
     // Send "thinking" indicator
     await sendMessage("system", "Thinking...", { type: "typing" });
 
+    // Create a web-compatible sender that mimics Telegram bot
+    const webBot = createWebSender();
+
     // Get AI response using the same chat function as Telegram
-    const reply = await chat(userId, text);
+    const reply = await chat(userId, text, webBot);
 
     if (reply) {
       // reply can be a string or an object { text, screenshots }
