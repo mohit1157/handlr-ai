@@ -1,6 +1,6 @@
 const config = require("../config");
 
-let currentModel = config.MODEL;
+let currentModel = config.MODEL; // Resolved after MODEL_MAP is defined
 
 // Lazy-loaded clients
 let openaiClient = null;
@@ -47,6 +47,9 @@ const MODEL_MAP = {
   "cheap": "gpt-4o-mini",
   "balanced": "claude-sonnet-4-20250514",
 };
+
+// Resolve MODEL from .env through MODEL_MAP
+currentModel = MODEL_MAP[currentModel] || currentModel;
 
 // Provider detection
 function getProvider(model) {
