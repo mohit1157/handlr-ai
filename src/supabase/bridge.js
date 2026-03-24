@@ -1,10 +1,15 @@
 const { createClient } = require("@supabase/supabase-js");
+const fs = require("fs");
+const path = require("path");
 const config = require("../config");
 const { chat } = require("../ai/openai");
 const chatHistory = require("../memory/chatHistory");
 
 let supabase = null;
 let isConnected = false;
+
+// Pending approval requests: Map<actionId, { resolve, timer }>
+const pendingWebApprovals = new Map();
 
 function initBridge() {
   if (!config.SUPABASE_URL || !config.LICENSE_KEY) {
@@ -43,53 +48,289 @@ async function updateBotStatus(online) {
   }
 }
 
-async function sendMessage(role, content, metadata = {}) {
-  if (!supabase) return;
+// ---------------------------------------------------------------------------
+// File upload to Supabase Storage
+// ---------------------------------------------------------------------------
+
+/**
+ * Upload a file (buffer or local path) to the "chat-files" storage bucket.
+ * Returns the public URL on success, or null on failure.
+ */
+async function uploadFileToStorage(filePathOrBuffer, fileName) {
+  if (!supabase) return null;
   try {
-    await supabase.from("messages").insert({
+    let fileBuffer;
+    if (Buffer.isBuffer(filePathOrBuffer)) {
+      fileBuffer = filePathOrBuffer;
+    } else if (typeof filePathOrBuffer === "string" && fs.existsSync(filePathOrBuffer)) {
+      fileBuffer = fs.readFileSync(filePathOrBuffer);
+    } else {
+      console.error("Supabase bridge: invalid file input for upload");
+      return null;
+    }
+
+    // Build a unique storage path: licenseKey/timestamp-filename
+    const storagePath = `${config.LICENSE_KEY}/${Date.now()}-${fileName}`;
+
+    // Determine content type from extension
+    const ext = path.extname(fileName).toLowerCase();
+    const mimeTypes = {
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".gif": "image/gif",
+      ".webp": "image/webp",
+      ".pdf": "application/pdf",
+      ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ".xls": "application/vnd.ms-excel",
+      ".csv": "text/csv",
+      ".doc": "application/msword",
+      ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ".txt": "text/plain",
+      ".json": "application/json",
+      ".zip": "application/zip",
+    };
+    const contentType = mimeTypes[ext] || "application/octet-stream";
+
+    const { data, error } = await supabase.storage
+      .from("chat-files")
+      .upload(storagePath, fileBuffer, {
+        contentType,
+        upsert: false,
+      });
+
+    if (error) {
+      console.error("Supabase bridge: storage upload error:", error.message);
+      return null;
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from("chat-files")
+      .getPublicUrl(storagePath);
+
+    const publicUrl = urlData?.publicUrl || null;
+    console.log(`Supabase bridge: uploaded ${fileName} → ${publicUrl}`);
+    return publicUrl;
+  } catch (err) {
+    console.error("Supabase bridge: upload failed:", err.message);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Message sending (extended with type, file_url, file_name support)
+// ---------------------------------------------------------------------------
+
+async function sendMessage(role, content, metadata = {}, options = {}) {
+  if (!supabase) return null;
+  try {
+    const row = {
       license_key: config.LICENSE_KEY,
       role,
       content,
       metadata,
-    });
+    };
+
+    // Optional typed-message fields
+    if (options.type) row.type = options.type;
+    if (options.file_url) row.file_url = options.file_url;
+    if (options.file_name) row.file_name = options.file_name;
+
+    const { data, error } = await supabase.from("messages").insert(row).select("id").single();
+    if (error) {
+      console.error("Supabase bridge: failed to send message:", error.message);
+      return null;
+    }
+    return data?.id || null;
   } catch (err) {
     console.error("Supabase bridge: failed to send message:", err.message);
+    return null;
   }
 }
 
-// Create a fake "bot" object that mimics Telegram bot API but sends via Supabase
+/**
+ * Send a file message: upload to storage, then insert a message row.
+ */
+async function sendFileMessage(filePathOrBuffer, fileName, caption) {
+  const url = await uploadFileToStorage(filePathOrBuffer, fileName);
+  if (!url) {
+    // Fallback: send as plain text if upload fails
+    await sendMessage("assistant", caption || `File: ${fileName}`, { fallback: true });
+    return null;
+  }
+  return await sendMessage("assistant", caption || fileName, {}, {
+    type: "file",
+    file_url: url,
+    file_name: fileName,
+  });
+}
+
+/**
+ * Send an image message: upload to storage, then insert a message row.
+ */
+async function sendImageMessage(imagePathOrBuffer, fileName, caption) {
+  const imgName = fileName || "screenshot.png";
+  const url = await uploadFileToStorage(imagePathOrBuffer, imgName);
+  if (!url) {
+    // Fallback: embed as base64 in metadata (legacy behaviour)
+    let photoData = null;
+    if (typeof imagePathOrBuffer === "string" && fs.existsSync(imagePathOrBuffer)) {
+      photoData = `data:image/png;base64,${fs.readFileSync(imagePathOrBuffer).toString("base64")}`;
+    }
+    await sendMessage("assistant", caption || "Screenshot", { type: "screenshot", image: photoData });
+    return null;
+  }
+  return await sendMessage("assistant", caption || "Screenshot", {}, {
+    type: "image",
+    file_url: url,
+    file_name: imgName,
+  });
+}
+
+/**
+ * Send a status/progress message.
+ */
+async function sendStatusMessage(content) {
+  return await sendMessage("assistant", content, {}, { type: "status" });
+}
+
+// ---------------------------------------------------------------------------
+// Approval flow via Supabase messages
+// ---------------------------------------------------------------------------
+
+/**
+ * Request approval from the web chat user.
+ * Inserts an "approval" message and waits for an "approval_response" message
+ * with the matching action_id.
+ * Returns true (approved) or false (denied/timeout).
+ */
+function requestWebApproval(toolName, args, timeoutMs) {
+  return new Promise(async (resolve) => {
+    const actionId = `webapprove_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const timer = setTimeout(() => {
+      pendingWebApprovals.delete(actionId);
+      console.log(`Supabase bridge: approval ${actionId} timed out`);
+      resolve(false);
+    }, timeoutMs || config.APPROVAL_TIMEOUT || 120000);
+
+    pendingWebApprovals.set(actionId, { resolve, timer });
+
+    // Build a human-readable description
+    const safeArgs = { ...args };
+    delete safeArgs.password;
+    delete safeArgs.pass;
+    delete safeArgs.credentials_json;
+    const description = `${toolName}: ${JSON.stringify(safeArgs).slice(0, 300)}`;
+
+    await sendMessage("assistant", description, {
+      action_id: actionId,
+      tool_name: toolName,
+      args: safeArgs,
+    }, { type: "approval" });
+
+    console.log(`Supabase bridge: approval requested → ${actionId} (${toolName})`);
+  });
+}
+
+/**
+ * Handle an incoming approval_response message from the web chat.
+ */
+function handleApprovalResponse(msg) {
+  const actionId = msg.metadata?.action_id;
+  if (!actionId) return false;
+
+  const pending = pendingWebApprovals.get(actionId);
+  if (!pending) return false;
+
+  const approved = msg.metadata?.approved === true;
+  clearTimeout(pending.timer);
+  pendingWebApprovals.delete(actionId);
+  pending.resolve(approved);
+
+  console.log(`Supabase bridge: approval ${actionId} → ${approved ? "APPROVED" : "DENIED"}`);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Web sender — mimics Telegram bot API, sends via Supabase
+// ---------------------------------------------------------------------------
+
 function createWebSender() {
   return {
     sendMessage: async (chatId, text, opts) => {
+      // If opts contains inline_keyboard (approval buttons), send as approval message
+      const keyboard = opts?.reply_markup?.inline_keyboard;
+      if (keyboard && keyboard.length > 0) {
+        // Extract approval info from callback_data
+        const approveBtn = keyboard.flat().find((b) => b.callback_data?.startsWith("approve:"));
+        const denyBtn = keyboard.flat().find((b) => b.callback_data?.startsWith("deny:"));
+        if (approveBtn && denyBtn) {
+          const approvalId = approveBtn.callback_data.split(":")[1];
+          await sendMessage("assistant", text, {
+            action_id: approvalId,
+            buttons: keyboard.flat().map((b) => ({
+              text: b.text,
+              callback_data: b.callback_data,
+            })),
+          }, { type: "approval" });
+          return { message_id: Date.now() };
+        }
+      }
+
       await sendMessage("assistant", text, { telegram_opts: opts });
       return { message_id: Date.now() };
     },
+
     sendPhoto: async (chatId, photo, opts) => {
-      // Convert photo buffer/path to base64 if needed
-      const fs = require("fs");
-      let photoData = null;
+      const caption = opts?.caption || "Screenshot";
+      // Upload to Supabase Storage instead of base64 in metadata
       if (typeof photo === "string" && fs.existsSync(photo)) {
-        photoData = `data:image/png;base64,${fs.readFileSync(photo).toString("base64")}`;
+        const fileName = path.basename(photo);
+        await sendImageMessage(photo, fileName, caption);
+      } else if (Buffer.isBuffer(photo)) {
+        await sendImageMessage(photo, "screenshot.png", caption);
+      } else {
+        // Fallback for URLs or other types
+        await sendMessage("assistant", caption, {
+          type: "screenshot",
+          image: typeof photo === "string" ? photo : null,
+        });
       }
-      await sendMessage("assistant", opts?.caption || "Screenshot", {
-        type: "screenshot",
-        image: photoData,
-      });
       return { message_id: Date.now() };
     },
+
     sendDocument: async (chatId, doc, opts) => {
-      await sendMessage("assistant", opts?.caption || "Document sent", {
-        type: "document",
-        filename: opts?.filename || "file",
-      });
+      const caption = opts?.caption || "Document";
+      const fileName = opts?.filename || "file";
+
+      if (typeof doc === "string" && fs.existsSync(doc)) {
+        await sendFileMessage(doc, fileName, caption);
+      } else if (Buffer.isBuffer(doc)) {
+        await sendFileMessage(doc, fileName, caption);
+      } else {
+        // Fallback: send as plain text message
+        await sendMessage("assistant", caption, {
+          type: "document",
+          filename: fileName,
+        });
+      }
       return { message_id: Date.now() };
     },
+
     editMessageText: async (text) => {
-      // Progress updates — just log, don't flood the chat
-      return;
+      // Send progress/status updates as status messages
+      if (text) {
+        await sendStatusMessage(text);
+      }
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Incoming message handling
+// ---------------------------------------------------------------------------
 
 async function handleUserMessage(msg) {
   const userId = config.LICENSE_KEY;
@@ -103,7 +344,7 @@ async function handleUserMessage(msg) {
     startSessionApproval(userId, "session", { minutes: 1440 });
 
     // Send "thinking" indicator
-    await sendMessage("system", "Thinking...", { type: "typing" });
+    await sendStatusMessage("Thinking...");
 
     // Create a web-compatible sender that mimics Telegram bot
     const webBot = createWebSender();
@@ -116,7 +357,16 @@ async function handleUserMessage(msg) {
       const replyText = typeof reply === "string" ? reply : (reply.text || JSON.stringify(reply));
       const screenshots = (typeof reply === "object" && reply.screenshots) ? reply.screenshots : [];
 
-      await sendMessage("assistant", replyText, { screenshots });
+      // Upload any screenshots attached to the reply
+      if (screenshots.length > 0) {
+        for (const screenshotPath of screenshots) {
+          if (typeof screenshotPath === "string" && fs.existsSync(screenshotPath)) {
+            await sendImageMessage(screenshotPath, path.basename(screenshotPath), "Screenshot");
+          }
+        }
+      }
+
+      await sendMessage("assistant", replyText);
       console.log(`[Web] Reply: ${replyText.substring(0, 100)}...`);
     }
   } catch (err) {
@@ -125,13 +375,17 @@ async function handleUserMessage(msg) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Realtime listener
+// ---------------------------------------------------------------------------
+
 async function startListening() {
   if (!supabase) return;
 
   // Mark bot as online
   await updateBotStatus(true);
 
-  // Subscribe to new user messages
+  // Subscribe to new messages (user messages + approval responses)
   const channel = supabase
     .channel("messages-listener")
     .on(
@@ -144,6 +398,13 @@ async function startListening() {
       },
       async (payload) => {
         const msg = payload.new;
+
+        // Handle approval responses from web chat
+        if (msg.role === "user" && msg.type === "approval_response") {
+          handleApprovalResponse(msg);
+          return;
+        }
+
         // Only process user messages (not our own replies)
         if (msg.role === "user") {
           await handleUserMessage(msg);
@@ -178,4 +439,15 @@ async function stopBridge() {
   }
 }
 
-module.exports = { initBridge, startListening, stopBridge, sendMessage };
+module.exports = {
+  initBridge,
+  startListening,
+  stopBridge,
+  sendMessage,
+  sendFileMessage,
+  sendImageMessage,
+  sendStatusMessage,
+  uploadFileToStorage,
+  requestWebApproval,
+  createWebSender,
+};
