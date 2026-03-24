@@ -66,60 +66,70 @@ async function chat(chatId, userMessage, bot) {
 
     // Execute each tool call — ALWAYS add tool result to history, even on error
     for (const toolCall of assistantMsg.tool_calls) {
-      const { name, arguments: argsJson } = toolCall.function;
-      let args;
-      try {
-        args = JSON.parse(argsJson);
-      } catch {
-        args = {};
-      }
-
       let result;
       try {
+        const { name, arguments: argsJson } = toolCall.function;
+        let args;
+        try { args = JSON.parse(argsJson); } catch { args = {}; }
+
         const approval = needsApproval(name, args, chatId);
 
         if (approval === "blocked") {
           result = { error: "This command is blocked for safety reasons." };
         } else if (approval === true) {
+          // Auto-approve for web chat (no interactive approval yet)
           try {
             const approved = await requestApproval(bot, chatId, name, args, config.APPROVAL_TIMEOUT);
             if (approved) {
-              if (bot?.sendMessage) await bot.sendMessage(chatId, `✅ Approved. Executing...`);
+              try { if (bot?.sendMessage) await bot.sendMessage(chatId, `✅ Approved. Executing...`); } catch {}
               result = await executeTool(name, args);
             } else {
               result = { denied: true, message: "Action was denied or timed out." };
             }
           } catch {
-            // Approval mechanism failed — auto-approve
-            result = await executeTool(name, args);
+            // Approval mechanism failed — auto-approve and execute
+            try {
+              result = await executeTool(name, args);
+            } catch (execErr) {
+              result = { error: `Tool ${name} failed (auto-approved): ${execErr.message}` };
+            }
           }
         } else {
           result = await executeTool(name, args);
         }
+
+        // Send documents/screenshots if available
+        if (result?.documentPath) {
+          try { if (bot?.sendDocument) await bot.sendDocument(chatId, result.documentPath, { caption: result.documentName || "Document" }); } catch {}
+        }
+        if (result?.screenshotPath) {
+          try {
+            if (bot?.sendPhoto) await bot.sendPhoto(chatId, result.screenshotPath, { caption: result.title ? `${result.title}\n${result.url || ""}` : undefined });
+            screenshotPaths.push(result.screenshotPath);
+          } catch {}
+        }
       } catch (err) {
-        // Tool execution threw — capture error as result
-        result = { error: `Tool ${name} failed: ${err.message}` };
-        console.error(`Tool ${name} error:`, err.message);
+        // Catch-all — no matter what goes wrong, we MUST have a result
+        result = { error: `Tool ${toolCall.function?.name || "unknown"} failed: ${err.message}` };
+        console.error(`Tool error:`, err.message);
       }
 
-      // Send documents/screenshots if available
-      if (result?.documentPath && bot?.sendDocument) {
-        try { await bot.sendDocument(chatId, result.documentPath, { caption: result.documentName || "Document" }); } catch {}
+      // GUARANTEED: always add tool result — prevents tool_calls chain corruption
+      try {
+        const resultContent = typeof result === "string" ? result : JSON.stringify(result || { error: "No result" });
+        history.addMessage(chatId, {
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: (resultContent || '{"error":"empty result"}').slice(0, config.TOOL_RESULT_MAX_LENGTH),
+        });
+      } catch (histErr) {
+        // Last resort — force a minimal tool result
+        history.addMessage(chatId, {
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: `{"error":"Failed to save result: ${histErr.message}"}`,
+        });
       }
-      if (result?.screenshotPath) {
-        try {
-          if (bot?.sendPhoto) await bot.sendPhoto(chatId, result.screenshotPath, { caption: result.title ? `${result.title}\n${result.url || ""}` : undefined });
-          screenshotPaths.push(result.screenshotPath);
-        } catch {}
-      }
-
-      // ALWAYS add tool result to history — prevents tool_calls chain corruption
-      const resultContent = typeof result === "string" ? result : JSON.stringify(result || { error: "No result" });
-      history.addMessage(chatId, {
-        role: "tool",
-        tool_call_id: toolCall.id,
-        content: resultContent.slice(0, config.TOOL_RESULT_MAX_LENGTH),
-      });
     }
     // Loop back for AI to process results
   }
