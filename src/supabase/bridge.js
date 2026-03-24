@@ -71,8 +71,12 @@ async function handleUserMessage(msg) {
     const reply = await chat(userId, text);
 
     if (reply) {
-      await sendMessage("assistant", reply);
-      console.log(`[Web] Reply: ${reply.substring(0, 100)}...`);
+      // reply can be a string or an object { text, screenshots }
+      const replyText = typeof reply === "string" ? reply : (reply.text || JSON.stringify(reply));
+      const screenshots = (typeof reply === "object" && reply.screenshots) ? reply.screenshots : [];
+
+      await sendMessage("assistant", replyText, { screenshots });
+      console.log(`[Web] Reply: ${replyText.substring(0, 100)}...`);
     }
   } catch (err) {
     console.error("Supabase bridge: message handling error:", err.message);
