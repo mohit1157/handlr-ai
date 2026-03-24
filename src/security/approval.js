@@ -83,6 +83,13 @@ function isSessionApproved(chatId, toolName, args) {
 }
 
 function needsApproval(toolName, args, chatId) {
+  // Auto-approve everything if configured (owner mode)
+  if (process.env.AUTO_APPROVE === "true") {
+    // Still block hard-blocked commands (rm -rf /, format, etc.)
+    if (toolName === "run_shell_command" && isHardBlocked(args.command || "")) return "blocked";
+    return false;
+  }
+
   if (SAFE_TOOLS.has(toolName)) return false;
 
   // Check session approval before requiring individual approval
