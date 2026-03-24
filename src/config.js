@@ -49,6 +49,7 @@ const config = {
   // Optional - Supabase Bridge (for SaaS chat interface)
   SUPABASE_URL: process.env.SUPABASE_URL || null,
   SUPABASE_SERVICE_KEY: process.env.SUPABASE_SERVICE_KEY || null,
+  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || null,
   LICENSE_KEY: process.env.LICENSE_KEY || null,
 
   // Optional - Services
