@@ -98,6 +98,10 @@ async function handleUserMessage(msg) {
   console.log(`[Web] ${text}`);
 
   try {
+    // Auto-grant session approval for web chat (owner is authenticated)
+    const { startSessionApproval } = require("../security/approval");
+    startSessionApproval(userId, "session", { minutes: 1440 });
+
     // Send "thinking" indicator
     await sendMessage("system", "Thinking...", { type: "typing" });
 
